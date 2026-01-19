@@ -1,10 +1,23 @@
 # CS336 Spring 2025 Assignment 1: Basics
 
+> **Understanding-Driven Implementation**: This project emphasizes conceptual verification alongside unit tests. Each component includes conceptual checkpoints and minimum viable tests to ensure you understand not just "how" but "why".
+
 For a full description of the assignment, see the assignment handout at
 [cs336_spring2025_assignment1_basics.pdf](./cs336_spring2025_assignment1_basics.pdf)
 
 If you see any issues with the assignment handout or code, please feel free to
 raise a GitHub issue or open a pull request with a fix.
+
+## Philosophy
+
+**Goal**: Not just "build a Transformer", but understand why each layer exists and what fails when removed.
+
+**Methodology**: Implementation ✔ + Unit Test ✔ + Conceptual Checkpoint ✔
+
+**Success Criteria**: You should be able to:
+- Draw the complete Transformer information flow
+- Explain how any module's removal causes failure
+- Describe in one sentence why Transformer "must be designed this way"
 
 ## Setup
 
@@ -21,7 +34,6 @@ and the environment will be automatically solved and activated when necessary.
 
 ### Run unit tests
 
-
 ```sh
 uv run pytest
 ```
@@ -29,6 +41,16 @@ uv run pytest
 Initially, all tests should fail with `NotImplementedError`s.
 To connect your implementation to the tests, complete the
 functions in [./tests/adapters.py](./tests/adapters.py).
+
+### Run conceptual tests
+
+Create minimum viable tests to verify your understanding:
+
+```sh
+uv run python conceptual_tests/test_<module>.py
+```
+
+These tests verify conceptual understanding, not just implementation correctness. See [PROJECT_PLAN.md](./PROJECT_PLAN.md) for detailed conceptual checkpoints.
 
 ### Download data
 Download the TinyStories data and a subsample of OpenWebText
