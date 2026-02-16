@@ -174,6 +174,37 @@ def _merge_word(word: tuple[int, ...], pair: tuple[int, int], new_id: int) -> tu
     return tuple(new_word)
 
 
+def _chunk_generator(
+    input_path: str | os.PathLike,
+    special_pattern: str | None,
+    chunk_size: int = 50_000_000,
+) -> list[tuple[str, str | None]]:
+    """
+    将大文件分块，在换行符处切割避免破坏特殊 token。
+    返回 (text_chunk, special_pattern) 元组列表，供 multiprocessing 使用。
+    """
+    chunks = []
+    leftover = ""
+    with open(input_path, "r", encoding="utf-8", errors="ignore") as f:
+        while True:
+            text = f.read(chunk_size)
+            if not text:
+                break
+            chunk = leftover + text
+            # 在最后一个换行符处切割，避免在行中间截断（特殊 token 不会跨行）
+            split_pos = chunk.rfind("\n")
+            if split_pos == -1:
+                # 没有换行符，整块处理
+                chunks.append((chunk, special_pattern))
+                leftover = ""
+            else:
+                chunks.append((chunk[: split_pos + 1], special_pattern))
+                leftover = chunk[split_pos + 1 :]
+    if leftover:
+        chunks.append((leftover, special_pattern))
+    return chunks
+
+
 def _pretokenize_chunk(args: tuple[str, str | None]) -> Counter:
     """
     对文本块进行预分词，并统计字节级 token 的频率。
@@ -294,23 +325,29 @@ def train_bpe(
     special_tokens = special_tokens or []
 
     # ==========================================================================
-    # 步骤 1：读取语料库并预分词
+    # 步骤 1：读取语料库并预分词（流式分块 + multiprocessing 并行）
     # ==========================================================================
-    with open(input_path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
-
     # 构建特殊 token 的匹配模式
-    # 按长度降序排序，确保长的特殊 token 优先匹配（贪婪匹配）
-    # 例如：如果有 "<|end|>" 和 "<|endoftext|>"，应该先尝试匹配后者
     special_pattern = None
     if special_tokens:
         sorted_tokens = sorted(special_tokens, key=len, reverse=True)
-        # re.escape 转义特殊字符，防止 token 中的字符被误解为正则语法
         escaped_tokens = [re.escape(token) for token in sorted_tokens]
         special_pattern = "|".join(escaped_tokens)
 
-    # 执行预分词并统计频率
-    token_counts = _pretokenize_chunk((text, special_pattern))
+    # 将文件分成 ~50MB 的块（在换行处切割），然后并行预分词
+    chunks = _chunk_generator(input_path, special_pattern)
+
+    num_workers = max(1, cpu_count() - 1)
+    if num_workers > 1 and len(chunks) > 1:
+        with Pool(num_workers) as pool:
+            results = pool.map(_pretokenize_chunk, chunks)
+    else:
+        results = [_pretokenize_chunk(c) for c in chunks]
+
+    # 合并所有块的词频统计
+    token_counts: Counter = Counter()
+    for result in results:
+        token_counts.update(result)
 
     # ==========================================================================
     # 步骤 2：初始化词汇表
@@ -342,40 +379,69 @@ def train_bpe(
         words[word] = count
 
     # ==========================================================================
-    # 步骤 4：执行 BPE 合并
+    # 步骤 4：执行 BPE 合并（增量更新优化）
     # ==========================================================================
+    # 优化策略：维护 pair_counts 和 pair_to_words 反向索引，
+    # 每次合并只更新受影响的词，而不是重新扫描全部词。
+    #
+    # pair_to_words[pair] = set of word-tuples containing that pair
+    # 当合并 (a, b) → new_id 时：
+    #   - 只处理 pair_to_words[(a, b)] 中的词
+    #   - 对每个受影响的词，增量更新 pair_counts 和 pair_to_words
+
+    # 初始化 pair_counts 和 pair_to_words
+    pair_counts: Counter = Counter()
+    pair_to_words: dict[tuple[int, int], set[tuple[int, ...]]] = defaultdict(set)
+
+    for word, freq in words.items():
+        for i in range(len(word) - 1):
+            pair = (word[i], word[i + 1])
+            pair_counts[pair] += freq
+            pair_to_words[pair].add(word)
+
     merges = []
 
     for _ in range(num_merges):
-        # 4a. 统计所有相邻 token 对的频率
-        pair_counts = _get_pair_counts(words)
-
         if not pair_counts:
-            # 没有更多的对可以合并（所有词都已经是单个 token）
             break
 
-        # 4b. 找到频率最高的对
+        # 找到频率最高的对，平局按字节序比较
         max_count = max(pair_counts.values())
+        best_pair = max(
+            (p for p, c in pair_counts.items() if c == max_count),
+            key=lambda p: (vocab_bytes[p[0]], vocab_bytes[p[1]]),
+        )
 
-        # 处理平局：按字节序比较
-        # 这确保了确定性的结果，相同的输入总是产生相同的输出
-        candidates = [(pair, count) for pair, count in pair_counts.items() if count == max_count]
-        # 比较时使用 bytes 而不是 int，因为多字节 token 的比较需要考虑完整内容
-        best_pair = max(candidates, key=lambda x: (vocab_bytes[x[0][0]], vocab_bytes[x[0][1]]))[0]
-
-        # 4c. 创建新 token
+        # 创建新 token
         new_token_id = next_token_id
         next_token_id += 1
-
-        # 新 token 的内容是两个被合并 token 的拼接
         vocab_bytes[new_token_id] = vocab_bytes[best_pair[0]] + vocab_bytes[best_pair[1]]
-        # 记录这次合并操作（使用 bytes 表示，便于后续使用）
         merges.append((vocab_bytes[best_pair[0]], vocab_bytes[best_pair[1]]))
 
-        # 4d. 更新所有词，执行合并
-        # 注意：这里创建了新的字典而不是原地修改，
-        # 因为合并可能改变词的哈希值（元组内容改变）
-        words = {_merge_word(word, best_pair, new_token_id): freq for word, freq in words.items()}
+        # 只处理包含 best_pair 的词（增量更新）
+        affected_words = list(pair_to_words.get(best_pair, set()))
+
+        for old_word in affected_words:
+            freq = words[old_word]
+            new_word = _merge_word(old_word, best_pair, new_token_id)
+
+            # 从 pair_counts 和 pair_to_words 移除旧词的贡献
+            for i in range(len(old_word) - 1):
+                old_pair = (old_word[i], old_word[i + 1])
+                pair_counts[old_pair] -= freq
+                if pair_counts[old_pair] <= 0:
+                    del pair_counts[old_pair]
+                pair_to_words[old_pair].discard(old_word)
+
+            # 向 pair_counts 和 pair_to_words 添加新词的贡献
+            for i in range(len(new_word) - 1):
+                new_pair = (new_word[i], new_word[i + 1])
+                pair_counts[new_pair] += freq
+                pair_to_words[new_pair].add(new_word)
+
+            # 更新 words 字典（new_token_id 是全新的，不会与已有词冲突）
+            del words[old_word]
+            words[new_word] = words.get(new_word, 0) + freq
 
     return vocab_bytes, merges
 
