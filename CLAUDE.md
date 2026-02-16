@@ -16,8 +16,94 @@ Stanford CS336 (Spring 2025) Assignment 1: Basics. Build all components needed t
 - `tests/` — Unit tests; `tests/adapters.py` bridges implementations to tests
 - `conceptual_tests/` — Conceptual understanding tests
 - `docs/` — Documentation
-- `data/` — Training data (not committed)
+- `data/` — Training data + serialized BPE artifacts (see below)
 - `debug/` — Scratch/debug scripts
+
+### tests/ 目录结构
+
+| 文件 | 作用 | 对应 adapter |
+|------|------|-------------|
+| `adapters.py` | 胶水层，将测试与实现解耦；每个 `run_*` / `get_*` 需要填写实现调用 | — |
+| `common.py` | 共享工具：`FIXTURES_PATH`、`gpt2_bytes_to_unicode()` | — |
+| `conftest.py` | pytest fixtures（snapshot、ts_state_dict、参数化输入等）| — |
+| `test_train_bpe.py` | BPE 训练：速度(<1.5s)、正确性、特殊 token | `run_train_bpe` |
+| `test_tokenizer.py` | encode/decode 正确性、与 tiktoken 对比、内存用量 | `get_tokenizer` |
+| `test_model.py` | Linear/Embedding/RMSNorm/SwiGLU/RoPE/Attention/MHA/Block/LM | `run_linear` 等 |
+| `test_nn_utils.py` | softmax、cross_entropy、gradient_clipping | 对应 adapter |
+| `test_optimizer.py` | AdamW、cosine LR schedule | `get_adamw_cls` 等 |
+| `test_data.py` | get_batch 数据加载 | `run_get_batch` |
+| `test_serialization.py` | model/optimizer checkpoint save+load | `run_save_checkpoint` 等 |
+| `fixtures/` | 小型测试语料（`corpus.en`、GPT-2 vocab/merges、TinyStories 样本）、BPE 参考输出 | — |
+| `_snapshots/` | 预计算的参考数值输出（`.npz`/`.pkl`），用于正确性验证 | — |
+
+### data/ 目录 — 所有文件均仅本地，不上传
+
+| 文件 | 来源 | 对应作业问题 |
+|------|------|------------|
+| `TinyStoriesV2-GPT4-train/valid.txt` | 课程提供 | BPE 训练 + LM 训练输入 |
+| `owt_train.txt` / `owt_valid.txt` | 课程提供 | OWT 实验输入 |
+| `tinystories_vocab.json` | **已生成** | Problem: train_bpe_tinystories（§2.5）|
+| `tinystories_merges.txt` | **已生成** | Problem: train_bpe_tinystories（§2.5）|
+| `tinystories_train.npy` *(待生成)* | tokenizer_experiments 产物 | Problem: tokenizer_experiments（§2.7）|
+| `tinystories_valid.npy` *(待生成)* | tokenizer_experiments 产物 | Problem: tokenizer_experiments（§2.7）|
+| `owt_train.npy` *(待生成)* | tokenizer_experiments 产物 | Problem: tokenizer_experiments（§2.7）|
+| `checkpoint_*.pt` *(待生成)* | 训练时保存 | Problem: checkpointing（§5.2）|
+
+### 提交物（需要上传的只有三项）
+
+| 产物 | 目标 | 内容 |
+|------|------|------|
+| `writeup.pdf` | Gradescope | 所有书面回答（unicode、BPE 分析、FLOPs 等）|
+| `code.zip` | Gradescope | `cs336_basics/` + `tests/adapters.py` 实现代码 |
+| leaderboard 结果 | GitHub PR（assignment1-basics-leaderboard）| 最终 val loss + 学习曲线 |
+
+## 作业进度
+
+> 依据 `tests/adapters.py` 中是否还有 `raise NotImplementedError` 判断代码完成状态。
+> ✅ 已完成 | ⬜ 待做
+
+| 问题 | 分值 | 代码 | 笔头 |
+|------|------|------|------|
+| **Part 2: BPE Tokenizer** | | | |
+| unicode1, unicode2 | 4pt | — | ⬜ |
+| train_bpe | 15pt | ✅ | — |
+| tokenizer (encode/decode) | 15pt | ✅ | — |
+| train_bpe_tinystories | 2pt | ✅ (data/已生成) | ⬜ 写耗时/最长token |
+| train_bpe_expts_owt | 2pt | ⬜ 需跑OWT | ⬜ |
+| tokenizer_experiments | 4pt | ⬜ 生成.npy | ⬜ |
+| **Part 3: Transformer LM** | | | |
+| linear | 1pt | ✅ | — |
+| embedding | 1pt | ✅ | — |
+| rmsnorm | 1pt | ✅ | — |
+| positionwise_feedforward (SwiGLU) | 2pt | ✅ | — |
+| rope | 2pt | ✅ | — |
+| softmax | 1pt | ✅ | — |
+| scaled_dot_product_attention | 5pt | ✅ | — |
+| multihead_self_attention | 5pt | ✅ | — |
+| transformer_block | 3pt | ✅ | — |
+| transformer_lm | 3pt | ✅ | — |
+| transformer_accounting (FLOPs) | 5pt | — | ⬜ |
+| **Part 4: Training** | | | |
+| cross_entropy | 1pt | ✅ | — |
+| gradient_clipping | 1pt | ✅ | — |
+| adamw | 2pt | ⬜ | — |
+| learning_rate_schedule | 1pt | ⬜ | — |
+| **Part 5: Training Loop** | | | |
+| data_loading (get_batch) | 2pt | ⬜ | — |
+| checkpointing | 1pt | ⬜ | — |
+| training_together | 4pt | ⬜ | — |
+| **Part 6: Text Generation** | | | |
+| decoding | 3pt | ⬜ | — |
+| **Part 7: Experiments** | | | |
+| learning_rate sweep | 3pt | ⬜ | ⬜ |
+| batch_size_experiment | 1pt | ⬜ | ⬜ |
+| generate | 1pt | ⬜ | ⬜ |
+| layer_norm_ablation | 1pt | ⬜ | ⬜ |
+| pre_norm_ablation | 1pt | ⬜ | ⬜ |
+| no_pos_emb | 1pt | ⬜ | ⬜ |
+| swiglu_ablation | 1pt | ⬜ | ⬜ |
+| main_experiment (OWT) | 2pt | ⬜ | ⬜ |
+| leaderboard | 6pt | ⬜ | ⬜ |
 
 ## Build & Run
 
