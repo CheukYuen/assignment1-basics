@@ -62,8 +62,8 @@ Stanford CS336 (Spring 2025) Assignment 1: Basics. Build all components needed t
 > 依据 `tests/adapters.py` 中是否还有 `raise NotImplementedError` 判断代码完成状态。
 > ✅ 已完成 | ⬜ 待做
 
-| 问题 | 分值 | 代码 | 笔头 |
-|------|------|------|------|
+| Problem | pts | Code | Written |
+|---------|-----|------|---------|
 | **Part 2: BPE Tokenizer** | | | |
 | unicode1, unicode2 | 4pt | — | ⬜ |
 | train_bpe | 15pt | ✅ | — |
