@@ -747,16 +747,19 @@ class Tokenizer:
                      for k, v in vocab_json.items()}
 
         # 加载合并规则
+        # 用 rsplit(' ', 1) 而不是 split()，以保留行首空格（空格字符也是有效 token）
+        # 用 errors='replace' 打开，跳过含有非 latin-1 字节的行（仅影响极少数非 ASCII merge）
         merges = []
-        with open(merges_filepath, "r") as f:
+        with open(merges_filepath, "r", errors="replace") as f:
             for line in f:
-                line = line.strip()
-                if line:
-                    parts = line.split()
-                    if len(parts) == 2:
-                        # 将 token 字符串编码为 bytes
-                        token1 = parts[0].encode("utf-8")
-                        token2 = parts[1].encode("utf-8")
-                        merges.append((token1, token2))
+                line = line.rstrip("\n")
+                if not line or "\ufffd" in line:
+                    continue
+                parts = line.rsplit(" ", 1)
+                if len(parts) == 2:
+                    # merges 文件以 raw bytes 写入、UTF-8 读回，用 utf-8 还原字节
+                    token1 = parts[0].encode("utf-8")
+                    token2 = parts[1].encode("utf-8")
+                    merges.append((token1, token2))
 
         return cls(vocab, merges, special_tokens)

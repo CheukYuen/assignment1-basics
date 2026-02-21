@@ -168,3 +168,6 @@ cython_debug/
 
 # Assignment data (not committed)
 data/
+
+# Training checkpoints (local only)
+checkpoints/

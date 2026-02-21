@@ -44,10 +44,12 @@ Stanford CS336 (Spring 2025) Assignment 1: Basics. Build all components needed t
 | `owt_train.txt` / `owt_valid.txt` | 课程提供 | OWT 实验输入 |
 | `tinystories_vocab.json` | **已生成** | Problem: train_bpe_tinystories（§2.5）|
 | `tinystories_merges.txt` | **已生成** | Problem: train_bpe_tinystories（§2.5）|
-| `tinystories_train.npy` *(待生成)* | tokenizer_experiments 产物 | Problem: tokenizer_experiments（§2.7）|
-| `tinystories_valid.npy` *(待生成)* | tokenizer_experiments 产物 | Problem: tokenizer_experiments（§2.7）|
+| `tinystories_train.npy` | **已生成** ~1.33B tokens | Problem: tokenizer_experiments（§2.7）|
+| `tinystories_valid.npy` | **已生成** ~13.4M tokens | Problem: tokenizer_experiments（§2.7）|
 | `owt_train.npy` *(待生成)* | tokenizer_experiments 产物 | Problem: tokenizer_experiments（§2.7）|
-| `checkpoint_*.pt` *(待生成)* | 训练时保存 | Problem: checkpointing（§5.2）|
+| `checkpoints/ckpt_0005000.pt` | **已生成** step 5000 | Problem: checkpointing（§5.2）|
+| `checkpoints/ckpt_0020000.pt` | **已生成** step 20000 | Problem: checkpointing（§5.2）|
+| `checkpoints/ckpt_0020000_final.pt` | **已生成** 最终模型 val_loss=0.7534 | Problem: training_together（§5.3）|
 
 ### 提交物（需要上传的只有三项）
 
@@ -70,7 +72,7 @@ Stanford CS336 (Spring 2025) Assignment 1: Basics. Build all components needed t
 | tokenizer (encode/decode) | 15pt | ✅ | — |
 | train_bpe_tinystories | 2pt | ✅ (data/已生成) | ⬜ 写耗时/最长token |
 | train_bpe_expts_owt | 2pt | ⬜ 需跑OWT | ⬜ |
-| tokenizer_experiments | 4pt | ⬜ 生成.npy | ⬜ |
+| tokenizer_experiments | 4pt | 🔶 train/valid.npy已生成，owt.npy待生成，writeup待写 | ⬜ |
 | **Part 3: Transformer LM** | | | |
 | linear | 1pt | ✅ | — |
 | embedding | 1pt | ✅ | — |
@@ -86,18 +88,18 @@ Stanford CS336 (Spring 2025) Assignment 1: Basics. Build all components needed t
 | **Part 4: Training** | | | |
 | cross_entropy | 1pt | ✅ | — |
 | gradient_clipping | 1pt | ✅ | — |
-| adamw | 2pt | ⬜ | — |
-| learning_rate_schedule | 1pt | ⬜ | — |
+| adamw | 2pt | ✅ | — |
+| learning_rate_schedule | 1pt | ✅ | — |
 | **Part 5: Training Loop** | | | |
-| data_loading (get_batch) | 2pt | ⬜ | — |
-| checkpointing | 1pt | ⬜ | — |
-| training_together | 4pt | ⬜ | — |
+| data_loading (get_batch) | 2pt | ✅ | — |
+| checkpointing | 1pt | ✅ | — |
+| training_together | 4pt | ✅ (cs336_basics/train.py) 训练完成 val_loss=0.7534 | — |
 | **Part 6: Text Generation** | | | |
-| decoding | 3pt | ⬜ | — |
+| decoding | 3pt | ✅ (transformer.generate + cs336_basics/generate.py) | — |
 | **Part 7: Experiments** | | | |
 | learning_rate sweep | 3pt | ⬜ | ⬜ |
 | batch_size_experiment | 1pt | ⬜ | ⬜ |
-| generate | 1pt | ⬜ | ⬜ |
+| generate | 1pt | ✅ (generate.py 已验证生成>256 tokens) | ⬜ writeup |
 | layer_norm_ablation | 1pt | ⬜ | ⬜ |
 | pre_norm_ablation | 1pt | ⬜ | ⬜ |
 | no_pos_emb | 1pt | ⬜ | ⬜ |
@@ -308,3 +310,131 @@ Implementations live in `cs336_basics/`. Tests call through adapter functions in
 - On CPU: `torch.compile(model)`
 - On MPS (Apple Silicon): `torch.compile(model, backend="aot_eager")`, do NOT use TF32
 - Cosine schedule should decay to min LR at exactly the final training step
+
+---
+
+## 运行环境
+
+- CPU: Intel Core i9-12700K
+- GPU: NVIDIA GeForce RTX 5070 Ti (16GB VRAM, sm_120/Blackwell)
+  - ✅ CUDA 正常工作，`torch.cuda.is_available() == True`
+  - ✅ sm_120 已在 `arch_list` 中：`['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120']`
+  - **PyTorch**: `2.12.0.dev20260220+cu128`（nightly，内置 CUDA 12.8 运行时）
+  - **解决方案**: `pyproject.toml` 已配置 `pytorch-nightly-cu128` 索引，`uv sync` 锁定 nightly 不降级
+- 系统 nvcc: 12.0（无需升级，torch 使用内置 CUDA 12.8 库）
+- 单线程 BPE 分词速度：约 7,500 lines/s
+
+---
+
+## 数据文件状态
+
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| `data/tinystories_vocab.json` | ✅ 已生成 | vocab_size=10000 |
+| `data/tinystories_merges.txt` | ✅ 已生成 | 9734 有效 merge 规则 |
+| `data/tinystories_valid.npy` | ✅ 已生成 | 13,396,709 tokens, uint16 |
+| `data/tinystories_train.npy` | ✅ 已生成 | ~1.33B tokens, uint16 |
+| `data/owt_train.npy` | ⬜ 需生成 | — |
+| `data/owt_valid.npy` | ⬜ 需生成 | — |
+| `checkpoints/ckpt_0005000.pt` | ✅ 已生成 | step 5000 中间 checkpoint |
+| `checkpoints/ckpt_0020000.pt` | ✅ 已生成 | step 20000 checkpoint |
+| `checkpoints/ckpt_0020000_final.pt` | ✅ 已生成 | 最终模型，val_loss=0.7534 |
+
+---
+
+## 新增文件（本次实现）
+
+| 文件 | 说明 |
+|------|------|
+| `cs336_basics/train.py` | 完整训练脚本，支持 CLI 配置、memmap、W&B、断点续训、bfloat16、TF32 |
+| `cs336_basics/tokenize_data.py` | 将原始文本分词并保存为 .npy（含进度报告） |
+| `cs336_basics/generate.py` | 文本生成脚本，支持单次/交互模式，temperature + top-p 采样 |
+
+### transformer.py 新增函数/类
+
+| 名称 | 说明 |
+|------|------|
+| `AdamW` | AdamW 优化器（含偏差修正、解耦权重衰减） |
+| `get_lr_cosine_schedule` | 带线性预热的余弦退火学习率调度 |
+| `get_batch` | 从 numpy token 数组采样 (x, y) 批次 |
+| `save_checkpoint` / `load_checkpoint` | 保存/恢复模型+优化器+迭代次数 |
+| `generate` | 自回归文本生成（支持温度缩放、top-p 采样） |
+
+---
+
+## 关键 Bug 修复记录
+
+### bpe.py `from_files` merges 解析 Bug
+
+**问题**：`line.strip().split()` 丢失行首空格，导致 6255 条以空格字符开头的 merge 规则被跳过。
+例：`  t`（空格+t 两个 token）被 `split()` 解析为 `['t']`（1个元素），不满足 `len==2` 直接跳过。
+
+**现象**：`tokenizer.encode_iterable()` 抛出 `KeyError: b'li'`（merge 产生的 token 不在 vocab 中）。
+
+**修复**（`bpe.py` `from_files` 方法）：
+```python
+# 旧：
+line = line.strip()
+parts = line.split()
+token1 = parts[0].encode("utf-8")
+
+# 新：
+line = line.rstrip("\n")
+if not line or "\ufffd" in line:
+    continue
+parts = line.rsplit(" ", 1)          # rsplit 保留行首空格
+token1 = parts[0].encode("utf-8")   # merges 文件以 raw bytes 写入后 UTF-8 读回
+```
+
+**附注**：
+- merges 文件以 `errors='replace'` 打开，跳过含 `\ufffd` 的行（10 行非 ASCII byte merge，英文训练集不影响）
+- vocab JSON 仍用 `encode("latin-1")`，merges 用 `encode("utf-8")`（文件编码不同）
+
+---
+
+## 训练命令（✅ 已完成训练）
+
+### 实际训练结果
+- **耗时**：48.9 分钟（RTX 5070 Ti，bfloat16 + TF32，~111k tok/s）
+- **最终 val loss**：0.7534（远超作业目标 ≤1.45）
+- **checkpoint**：`checkpoints/ckpt_0020000_final.pt`
+- **日志**：`logs/train_tinystories.log`
+
+### 复现命令（nohup 后台运行）
+```bash
+mkdir -p checkpoints logs
+nohup uv run python cs336_basics/train.py \
+    --train_data data/tinystories_train.npy \
+    --val_data   data/tinystories_valid.npy \
+    --vocab_size 10000 \
+    --context_length 256 \
+    --d_model 512 \
+    --d_ff 1344 \
+    --num_layers 4 \
+    --num_heads 16 \
+    --max_lr 3e-4 \
+    --min_lr 3e-5 \
+    --warmup_iters 2000 \
+    --total_iters 20000 \
+    --batch_size 64 \
+    --use_bf16 \
+    --checkpoint_dir checkpoints/ \
+    --log_interval 100 \
+    --val_interval 500 \
+    --save_interval 5000 \
+    > logs/train_tinystories.log 2>&1 &
+# 总 tokens = 64 * 20000 * 256 = 327,680,000 (满足作业要求)
+```
+
+### 生成推理命令
+```bash
+# 单次生成
+uv run python cs336_basics/generate.py \
+    --checkpoint checkpoints/ckpt_0020000_final.pt \
+    --prompt "Once upon a time" \
+    --max_new_tokens 300 --temperature 0.8 --top_p 0.95
+
+# 交互模式
+uv run python cs336_basics/generate.py \
+    --checkpoint checkpoints/ckpt_0020000_final.pt
+```

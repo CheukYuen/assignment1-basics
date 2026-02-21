@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import math
+import os
+from collections.abc import Callable, Iterable
+from typing import IO, BinaryIO, Optional
 
+import numpy as np
 import torch
 from einops import einsum, rearrange
 from torch import Tensor
@@ -359,3 +363,215 @@ def gradient_clipping(parameters, max_l2_norm: float) -> None:
     if clip_coef < 1.0:
         for p in params_with_grad:
             p.grad.mul_(clip_coef)
+
+
+# ---------------------------------------------------------------------------
+# AdamW Optimizer
+# ---------------------------------------------------------------------------
+
+class AdamW(torch.optim.Optimizer):
+    """AdamW optimizer following Loshchilov and Hutter (2019) Algorithm 2."""
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.01,
+    ):
+        if lr < 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay}
+        super().__init__(params, defaults)
+
+    def step(self, closure: Optional[Callable] = None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            eps = group["eps"]
+            weight_decay = group["weight_decay"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+                state = self.state[p]
+
+                # Initialize state
+                if len(state) == 0:
+                    state["t"] = 0
+                    state["m"] = torch.zeros_like(p.data)
+                    state["v"] = torch.zeros_like(p.data)
+
+                state["t"] += 1
+                t = state["t"]
+                m = state["m"]
+                v = state["v"]
+
+                # Update biased first and second moment estimates
+                m.mul_(beta1).add_(grad, alpha=1 - beta1)
+                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                # Compute bias-corrected learning rate
+                alpha_t = lr * math.sqrt(1 - beta2 ** t) / (1 - beta1 ** t)
+
+                # Update parameters
+                p.data.addcdiv_(m, v.sqrt().add_(eps), value=-alpha_t)
+
+                # Apply decoupled weight decay
+                p.data.mul_(1 - lr * weight_decay)
+
+        return loss
+
+
+# ---------------------------------------------------------------------------
+# Cosine Learning Rate Schedule with Linear Warmup
+# ---------------------------------------------------------------------------
+
+def get_lr_cosine_schedule(
+    it: int,
+    max_learning_rate: float,
+    min_learning_rate: float,
+    warmup_iters: int,
+    cosine_cycle_iters: int,
+) -> float:
+    """Cosine annealing LR schedule with linear warmup."""
+    if it < warmup_iters:
+        return (it / warmup_iters) * max_learning_rate
+    elif it <= cosine_cycle_iters:
+        progress = (it - warmup_iters) / (cosine_cycle_iters - warmup_iters)
+        return min_learning_rate + 0.5 * (1 + math.cos(math.pi * progress)) * (max_learning_rate - min_learning_rate)
+    else:
+        return min_learning_rate
+
+
+# ---------------------------------------------------------------------------
+# Data Loading (get_batch)
+# ---------------------------------------------------------------------------
+
+def get_batch(
+    dataset: np.ndarray,
+    batch_size: int,
+    context_length: int,
+    device: str,
+) -> tuple[Tensor, Tensor]:
+    """Sample a batch of (input, target) pairs from a token array.
+
+    Args:
+        dataset: 1D integer numpy array of token IDs.
+        batch_size: Number of sequences in the batch.
+        context_length: Length of each sequence.
+        device: PyTorch device string.
+
+    Returns:
+        Tuple of LongTensors (x, y) each of shape (batch_size, context_length).
+        y[i] = x[i] shifted by one position (next-token targets).
+    """
+    n = len(dataset)
+    # Valid start indices: 0 .. n - context_length - 1  (need context_length+1 tokens)
+    starts = np.random.randint(0, n - context_length, size=batch_size)
+    x = np.stack([dataset[i : i + context_length] for i in starts])
+    y = np.stack([dataset[i + 1 : i + context_length + 1] for i in starts])
+    x_t = torch.tensor(x, dtype=torch.long, device=device)
+    y_t = torch.tensor(y, dtype=torch.long, device=device)
+    return x_t, y_t
+
+
+# ---------------------------------------------------------------------------
+# Checkpointing
+# ---------------------------------------------------------------------------
+
+def save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    out: str | os.PathLike | BinaryIO | IO[bytes],
+) -> None:
+    """Save model, optimizer state and iteration count to a file."""
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "iteration": iteration,
+    }
+    torch.save(checkpoint, out)
+
+
+def load_checkpoint(
+    src: str | os.PathLike | BinaryIO | IO[bytes],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+) -> int:
+    """Load model/optimizer state from a checkpoint file. Returns saved iteration."""
+    checkpoint = torch.load(src, weights_only=False)
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    return checkpoint["iteration"]
+
+
+# ---------------------------------------------------------------------------
+# Text Generation (Decoding)
+# ---------------------------------------------------------------------------
+
+def generate(
+    model: torch.nn.Module,
+    token_ids: Tensor,
+    max_new_tokens: int,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    eos_token_id: int | None = None,
+) -> Tensor:
+    """Autoregressively generate tokens from a language model.
+
+    Args:
+        model: TransformerLM (or similar) that takes (batch, seq) → (batch, seq, vocab).
+        token_ids: (batch, prefix_len) integer prompt tensor.
+        max_new_tokens: Maximum number of tokens to generate.
+        temperature: Softmax temperature (τ). Values < 1 sharpen, > 1 flatten.
+        top_p: Nucleus sampling threshold p ∈ (0, 1]. Use 1.0 to disable.
+        eos_token_id: If provided, stop generation when this token is sampled.
+
+    Returns:
+        (batch, prefix_len + generated_len) integer tensor.
+    """
+    model.eval()
+    generated = token_ids.clone()
+
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            # Truncate to context_length if needed
+            context = generated
+            if hasattr(model, "context_length"):
+                context = generated[:, -model.context_length :]
+
+            logits = model(context)  # (batch, seq, vocab)
+            next_logits = logits[:, -1, :]  # (batch, vocab)
+
+            # Temperature scaling
+            if temperature != 1.0:
+                next_logits = next_logits / temperature
+
+            probs = softmax(next_logits, dim=-1)  # (batch, vocab)
+
+            # Top-p (nucleus) sampling
+            if top_p < 1.0:
+                sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                # Remove tokens where cumulative prob exceeds top_p
+                # Keep at least one token (the most probable)
+                sorted_probs_to_remove = cumulative_probs - sorted_probs > top_p
+                sorted_probs[sorted_probs_to_remove] = 0.0
+                # Renormalize
+                sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
+                # Scatter back to original ordering
+                probs = torch.zeros_like(sorted_probs).scatter_(1, sorted_indices, sorted_probs)
+
+            next_tokens = torch.multinomial(probs, num_samples=1)  # (batch, 1)
+            generated = torch.cat([generated, next_tokens], dim=1)
+
+            # Check for EOS
+            if eos_token_id is not None and (next_tokens == eos_token_id).all():
+                break
+
+    return generated
